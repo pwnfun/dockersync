@@ -1,0 +1,36 @@
+name: Docker Image Sync to Tencent Cloud
+on:
+  workflow_dispatch:
+    inputs:
+      source_image:
+        description: '海外镜像地址 (如 ghcr.io/sunblaze-ucb/exploitgym-v8:human-346835902)'
+        required: true
+      target_tag:
+        description: '转存后的标签别名 (如 exploitgym-v8:human-346835902)'
+        required: true
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to Tencent Cloud Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.TENCENT_REGISTRY }}
+          username: ${{ secrets.TENCENT_USERNAME }}
+          password: ${{ secrets.TENCENT_PASSWORD }}
+      - name: Pull, Tag, and Push
+        run: |
+          # 1. 在海外节点拉取 ghcr 镜像 (几秒拉完)
+          docker pull ${{ github.event.inputs.source_image }}
+          
+          # 2. 打标签 (注意：把 myseclab 换成你在腾讯云建立的命名空间名字)
+          TARGET_IMAGE="${{ secrets.TENCENT_REGISTRY }}/myseclab/${{ github.event.inputs.target_tag }}"
+          docker tag ${{ github.event.inputs.source_image }} $TARGET_IMAGE
+          
+          # 3. 推送到腾讯云
+          docker push $TARGET_IMAGE
+          
+          echo "=========================================="
+          echo "同步成功！国内本地命令行直接运行："
+          echo "docker pull $TARGET_IMAGE"
+          echo "=========================================="

@@ -45,7 +45,8 @@ jobs:
           TARGET="${REG}/${NS}/${s}"
           echo "源  : ${SRC}"
           echo "目标: ${TARGET}"
-          AUTH="$(mktemp)"; trap 'rm -f "$AUTH"' EXIT
+          AUTHDIR="$(mktemp -d)"; AUTH="$AUTHDIR/auth.json"; trap 'rm -rf "$AUTHDIR"' EXIT
+          printf '%s' '{}' > "$AUTH"
           skopeo login "$REG" --username "$TCR_USER" --password "$TCR_PASS" --authfile "$AUTH" >/dev/null
           # --all 完整保留 manifest list(amd64+arm64+...),不要换成 docker pull/push(会丢 arm64)
           skopeo copy --all --authfile "$AUTH" "docker://$SRC" "docker://$TARGET"

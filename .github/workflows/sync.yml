@@ -1,36 +1,58 @@
 name: Docker Image Sync to Tencent Cloud
+
 on:
   workflow_dispatch:
     inputs:
       source_image:
-        description: '海外镜像地址 (如 ghcr.io/sunblaze-ucb/exploitgym-v8:human-346835902)'
+        description: '海外镜像地址,如 ghcr.io/owner/image:tag 或 nginx:1.27'
         required: true
-      target_tag:
-        description: '转存后的标签别名 (如 exploitgym-v8:human-346835902)'
-        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tcr-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      REG: ${{ secrets.TENCENT_REGISTRY }}
+      TCR_USER: ${{ secrets.TENCENT_USERNAME }}
+      TCR_PASS: ${{ secrets.TENCENT_PASSWORD }}
+      NS: pwnfun
+      SRC: ${{ github.event.inputs.source_image }}
     steps:
-      - name: Login to Tencent Cloud Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.TENCENT_REGISTRY }}
-          username: ${{ secrets.TENCENT_USERNAME }}
-          password: ${{ secrets.TENCENT_PASSWORD }}
-      - name: Pull, Tag, and Push
+      - name: 安装 skopeo
         run: |
-          # 1. 在海外节点拉取 ghcr 镜像 (几秒拉完)
-          docker pull ${{ github.event.inputs.source_image }}
-          
-          # 2. 打标签 (注意：把 myseclab 换成你在腾讯云建立的命名空间名字)
-          TARGET_IMAGE="${{ secrets.TENCENT_REGISTRY }}/myseclab/${{ github.event.inputs.target_tag }}"
-          docker tag ${{ github.event.inputs.source_image }} $TARGET_IMAGE
-          
-          # 3. 推送到腾讯云
-          docker push $TARGET_IMAGE
-          
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+          skopeo --version
+
+      - name: 派生目标并复制(保留多架构 amd64+arm64)
+        run: |
+          set -euo pipefail
+          if [ -z "$REG" ] || [ -z "$TCR_USER" ] || [ -z "$TCR_PASS" ]; then
+            echo "::error::缺少 TENCENT_REGISTRY / TENCENT_USERNAME / TENCENT_PASSWORD 中的某个 secret,请到 Settings→Secrets→Actions 检查。"
+            exit 1
+          fi
+          # 去掉源的 registry 前缀,拼到 ccr.ccs.tencentyun.com/pwnfun/ 下
+          s="${SRC#docker://}"
+          s="${s#ghcr.io/}"; s="${s#docker.io/}"; s="${s#registry-1.docker.io/}"
+          s="${s#/}"
+          TARGET="${REG}/${NS}/${s}"
+          echo "源  : ${SRC}"
+          echo "目标: ${TARGET}"
+          AUTH="$(mktemp)"; trap 'rm -f "$AUTH"' EXIT
+          skopeo login "$REG" --username "$TCR_USER" --password "$TCR_PASS" --authfile "$AUTH" >/dev/null
+          # --all 完整保留 manifest list(amd64+arm64+...),不要换成 docker pull/push(会丢 arm64)
+          skopeo copy --all --authfile "$AUTH" "docker://$SRC" "docker://$TARGET"
+          echo "::group::目标镜像架构清单"
+          skopeo inspect --raw "docker://$TARGET" | grep -E '"(architecture|os)"' | sort -u || true
+          echo "::endgroup::"
           echo "=========================================="
-          echo "同步成功！国内本地命令行直接运行："
-          echo "docker pull $TARGET_IMAGE"
+          echo "✅ 同步成功,国内本地执行:"
+          echo "docker pull ${TARGET}"
           echo "=========================================="
